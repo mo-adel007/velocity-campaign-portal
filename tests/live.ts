@@ -49,7 +49,7 @@ export async function connectLive(tag: string): Promise<Live> {
   const ref = env.SUPABASE_PROJECT_REF!;
   const url = `https://${ref}.supabase.co`;
   // Realtime is never used; the stub transport only lets supabase-js start on Node 20.
-  const opts = { auth: { persistSession: false, autoRefreshToken: false }, realtime: { transport: class {} } } as const;
+  const opts = { auth: { persistSession: false, autoRefreshToken: false }, realtime: { transport: class {} as never } };
 
   const pooler = new URL(readFileSync(poolerFile, "utf8").trim());
   const db = new pg.Client({
