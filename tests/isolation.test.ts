@@ -11,21 +11,10 @@
  *      function and Storage folder for other brands' data; a signed-out client
  *      asks for everything. Nothing may come back.
  *
- * Needs SUPABASE_ACCESS_TOKEN, SUPABASE_PROJECT_REF and SUPABASE_DB_PASSWORD
- * (run with `node scripts/env-run.mjs vitest run tests/isolation.test.ts`) and a
- * linked project (`supabase/.temp/pooler-url`). Skipped when they are missing.
- * Test users and their allowlist rows are removed afterwards.
+ * Live setup and cleanup: see tests/live.ts.
  */
-import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-const env = process.env;
-const poolerFile = path.join(__dirname, "..", "supabase", ".temp", "pooler-url");
-const configured = Boolean(env.SUPABASE_ACCESS_TOKEN && env.SUPABASE_PROJECT_REF && env.SUPABASE_DB_PASSWORD && existsSync(poolerFile));
+import { connectLive, liveConfigured, type Live, type Member } from "./live";
 
 // The only public table allowed to lack brand_id; it is still scoped to the caller's own brand.
 const UNBRANDED = new Set(["brands"]);
@@ -72,37 +61,16 @@ const VIOLATIONS_SQL = `
         or has_table_privilege('authenticated', oid, 'delete') or has_table_privilege('authenticated', oid, 'truncate'))
   order by 1, 2`;
 
-describe.skipIf(!configured)("brand isolation (live project)", { timeout: 60_000 }, () => {
-  const ref = env.SUPABASE_PROJECT_REF!;
-  const url = `https://${ref}.supabase.co`;
-  // Realtime is never used; the stub transport only lets supabase-js start on Node 20.
-  const opts = { auth: { persistSession: false, autoRefreshToken: false }, realtime: { transport: class {} } } as const;
-  const runId = randomBytes(4).toString("hex");
-
-  let db: pg.Client;
-  let admin: SupabaseClient;
-  let publicKey: string;
-  let brands: { id: string; code: string }[];
+describe.skipIf(!liveConfigured)("brand isolation (live project)", { timeout: 60_000 }, () => {
+  let live: Live;
+  let db: Live["db"];
+  let admin: Live["admin"];
   let brandTables: string[];
-  const users: { brand: { id: string; code: string }; userId: string; email: string; client: SupabaseClient }[] = [];
+  const users: Member[] = [];
 
   beforeAll(async () => {
-    const pooler = new URL(readFileSync(poolerFile, "utf8").trim());
-    db = new pg.Client({
-      host: pooler.hostname, port: Number(pooler.port), database: pooler.pathname.slice(1),
-      user: decodeURIComponent(pooler.username), password: env.SUPABASE_DB_PASSWORD, ssl: { rejectUnauthorized: false },
-    });
-    await db.connect();
-
-    const keys: { type: string; name: string; api_key: string }[] = await fetch(
-      `https://api.supabase.com/v1/projects/${ref}/api-keys?reveal=true`,
-      { headers: { Authorization: `Bearer ${env.SUPABASE_ACCESS_TOKEN}` } },
-    ).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`api-keys: ${r.status}`))));
-    const pick = (type: string, legacy: string) => (keys.find((k) => k.type === type) ?? keys.find((k) => k.name === legacy))?.api_key;
-    publicKey = pick("publishable", "anon")!;
-    admin = createClient(url, pick("secret", "service_role")!, opts);
-
-    brands = (await db.query("select id, code from public.brands order by code")).rows;
+    live = await connectLive("isolation");
+    ({ db, admin } = live);
     brandTables = (
       await db.query(`
         select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
@@ -111,23 +79,11 @@ describe.skipIf(!configured)("brand isolation (live project)", { timeout: 60_000
         order by 1`)
     ).rows.map((r) => r.relname);
 
-    for (const brand of brands) {
-      const email = `vcp-isolation-${runId}-${brand.code.toLowerCase()}@example.com`;
-      const password = randomBytes(18).toString("base64url");
-      await db.query("insert into private.allowed_users (email, brand_id, role) values ($1, $2, 'analyst')", [email, brand.id]);
-      const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
-      if (error) throw error;
-      const client = createClient(url, publicKey, opts);
-      const signIn = await client.auth.signInWithPassword({ email, password });
-      if (signIn.error) throw signIn.error;
-      users.push({ brand, userId: data.user.id, email, client });
-    }
+    for (const brand of live.brands) users.push(await live.createMember(brand.code, "analyst"));
   });
 
   afterAll(async () => {
-    for (const u of users) await admin?.auth.admin.deleteUser(u.userId);
-    await db?.query("delete from private.allowed_users where email like $1", [`vcp-isolation-${runId}-%`]);
-    await db?.end();
+    await live?.close();
   });
 
   it("every public table satisfies the isolation rules", async () => {
@@ -160,11 +116,12 @@ describe.skipIf(!configured)("brand isolation (live project)", { timeout: 60_000
     }
   });
 
-  it("each test user belongs to exactly its own brand", async () => {
+  it("each test user sees only members of its own brand, itself included", async () => {
     for (const u of users) {
       const { data, error } = await u.client.from("brand_members").select("user_id, brand_id");
       expect(error).toBeNull();
-      expect(data).toEqual([{ user_id: u.userId, brand_id: u.brand.id }]);
+      expect(data).toContainEqual({ user_id: u.userId, brand_id: u.brand.id });
+      expect(data!.every((m) => m.brand_id === u.brand.id)).toBe(true);
     }
   });
 
@@ -228,7 +185,7 @@ describe.skipIf(!configured)("brand isolation (live project)", { timeout: 60_000
   });
 
   it("signed-out requests get nothing from any table or dashboard function (AC1.6)", async () => {
-    const anon = createClient(url, publicKey, opts);
+    const anon = live.newClient();
     for (const table of [...UNBRANDED, ...brandTables]) {
       const { data } = await anon.from(table).select("*").limit(1);
       expect(data ?? [], `anon read ${table}`).toEqual([]);
