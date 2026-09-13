@@ -8,6 +8,10 @@
 
 **Pages smoke test (2026-09-13):** temporary Kilele owner, Kilele analyst and Marrakech owner with real `@supabase/ssr` session cookies against `next start`: 16/16 route checks passed (owner sees "34,665 customers → 34,665 addresses" and the approve control on KIL-0016; analyst sees neither send nor upload control; SMS campaign states why; a Karoo campaign id and a random send id show not-found; a page past the end shows the empty state; signed-out `/` redirects to `/login`). No approve_send was called. Kilele timings after warm-up: `/contacts` ~115 ms, page 50 ~110 ms, search ~110 ms, owner campaign detail with `preview_send` ~120 ms (AC3.1). Temp users and allowlist rows removed.
 
+**Deploy (2026-09-13):** PR #2 merged into `main` as a merge commit (`c571777`, body "Part of #1", so the issue stays open). Vercel project `velocity-campaign-portal` (team `mo-adel007-3246s-projects`) is linked to the GitHub repo, and `main` is the production branch → https://velocity-campaign-portal.vercel.app. Env (Production + Preview): `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `NEXT_PUBLIC_SITE_URL`; no server secrets. Function region `dub1`, next to Supabase `eu-west-1`: with the default `iad1`, signed-in `/contacts` took ~5.8 s and the dashboard returned 500 (cause not confirmed; it disappeared with the region change). Supabase Auth: Site URL = the Vercel URL; redirect allow-list = localhost, 127.0.0.1 and the Vercel URL (`/**`); mirrored in `supabase/config.toml`. Live sanity 8/8: `/login` 200, signed-out `/` → `/login`, no server-only env value or `sb_secret_` in the HTML or its 8 JS chunks, a temp Kilele owner (real session cookie) sees the dashboard with the Owner role, `/contacts` (1.1 s cold), `/campaigns` and `/imports` render. All `vcp-*` temp users, allowlist rows and memberships are removed (one left behind by the earlier pages smoke test was deleted).
+
+**Verification next:** run ac-verify in a **new session** against the live URL. Scope = built ACs: AC1.1, 1.3–1.7, 2.1–2.6, 3.1–3.9, 3.13, 5.1–5.2. Record the rest as not built yet (Google sign-in AC1.2; dispatch AC3.10–3.12, 3.14; provider feedback AC4.1–4.3; shares AC4.4–4.9).
+
 **Auth config (2026-09-13):** set on the project through the Management API and mirrored in `supabase/config.toml`. `disable_signup=true`; before-user-created hook `pg-functions://postgres/private/hook_before_user_created` enabled. Verified: public signup refused ("Signups not allowed"); with signups briefly re-enabled, a stranger got 403 "This account is not authorised…" and no account was created. The Admin API (server key only) bypasses hooks. Google sign-in for existing users relies on linking by verified email; to be verified once the Google accounts exist.
 
 **Send flow SQL (2026-09-13):** migrations `20260913160000_sends`, `20260913160100_dispatch_pause`. `tests/sends.test.ts` 10/10 live, `tests/isolation.test.ts` 9/9 (now also covers `sends`, `send_chunks`, `send_recipients` automatically). Decisions: chunk size 250 (to revisit once provider limits are known; fixed per approval); `recipient_id` sent to the provider = lowest customer external id behind the address; an address is suppressed at its chunk's first claim if ANY of its customers became ineligible, or if none of them still has that email ("Email address changed after approval"); a chunk that is not confirmed after 5 attempts ends failed, with the last error on each pending recipient; `record_send_chunk` requires a result for every pending recipient and is a no-op for the same batch twice; last sent = latest of portal approval, file `sent_at`, seed send-log `queued_at`; the confirm carries the previewed address count and is refused (VC422) if the audience moved. Custom SQLSTATEs: VC403/VC404/VC409/VC422. Dispatch pause is a lease (`pause_dispatch(minutes)`, max 60) so live tests cannot trigger real sends.
@@ -137,7 +141,7 @@ Velocity Growth Growth Engineer build task. Graded primarily on data correctness
 
 - [ ] Loading, empty and error states on every screen; bad input rejected
 - [ ] Responsive at phone width
-- [ ] Deployed to a public Vercel URL
+- [x] Deployed to a public Vercel URL (https://velocity-campaign-portal.vercel.app; deploys from `main`)
 - [ ] Public repo with real history, `schema.sql`, README
 - [ ] Submission note (≤300 words)
 
@@ -389,7 +393,7 @@ Then it is not found
 
 **Test fixtures:** synthetic seed bundle (SHA-256 `4961a25b…683d35c`), copied into the repo's fixtures; malformed upload files; fixture events (duplicates, out-of-order, Kilele/Karoo shared email) — to be created
 
-**Environment:** live URL on Vercel (TBD); Supabase project (TBD); provider base URL `https://dispatcher-production-72fc.up.railway.app` (key via Supabase secret, never committed)
+**Environment:** live URL https://velocity-campaign-portal.vercel.app; Supabase project `dbedjxkhytvlvlkwdoma` (eu-west-1); provider base URL `https://dispatcher-production-72fc.up.railway.app` (key via Supabase secret, never committed)
 
 **Setup:** seed script loads all three brands; dispatch interruption hook for AC3.11; first real provider send only through the finished portal
 
