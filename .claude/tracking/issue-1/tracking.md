@@ -2,11 +2,11 @@
 
 ## Status (2026-09-13)
 
-**Progress:** Execute phase. Done: schema, ingestion, seed load, dashboard RPCs, isolation test, auth config (signups off, allowlist hook on), send flow SQL (preview, approval, frozen snapshot, single-flight, worker functions, dispatch pause), pg_cron worker kick for imports, UI foundation (Supabase SSR clients, `src/proxy.ts`, `getPortal`, formatting, shared UI components, light/dark tokens, sign-in with password + Google, OAuth callback). Next: portal pages. Waiting on the user for the provider's send API docs (endpoint, body, response, limits) before the dispatch Edge Function + event poller.
+**Progress:** Execute phase. Done: schema, ingestion, seed load, dashboard RPCs, isolation test, auth config, send flow SQL, pg_cron import kick, UI foundation, and the portal pages: `(portal)` layout (brand, role, nav, sign out), loading/error/not-found states, dashboard (totals, exclusion breakdown with sum check, 30-day signups chart with hatched partial today + table view, reported vs counted performance with denominators), contacts (search + paging), campaigns list (channel, last sent, sendability), campaign detail (performance, owner send preview with rule, "N customers → M addresses", paged recipients, confirm via `approve_send` → `/sends/[id]`; analysts see no control), send detail (permanent approval, status counts that add up, batches, recipients filterable by status with reason, auto-refresh while sending), imports (owner upload browser → Storage → `request_import`, history with counts, auto-refresh while running) and import detail (rejected rows and warnings with row number, reason, raw). Next: dispatch Edge Function + event poller (waiting on the provider's send API docs), shares, Google OAuth, deploy, docs.
 
-**Last commit:** see `git log` — UI foundation (`next build` passes; 44/44 tests at the send-flow commit)
+**Last commit:** see `git log` — portal pages (`next build` and ESLint pass).
 
-**UI notes for the next session:** Next 16.3 — `proxy.ts` (not middleware), async `params`/`searchParams` with global `PageProps<'/route'>`, `error.tsx` props `{ error, retry }`, `redirect()` outside try/catch, no caching by default. Uploads go browser → Storage (`<brand_id>/<uuid>-<name>`), then the `request_import` server action (server action body limit). The scaffold `src/app/page.tsx` must be deleted when `(portal)/page.tsx` is added. `.env.local` now also holds `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. Planned pages: `(portal)/layout` (nav, role, sign out), loading/error, dashboard (signups chart: one blue series, hover tooltip, today hatched and labelled partial, timezone label, table view; breakdown sums to total), contacts (search + paging with the `contact_block_reason` computed column; check < 2 s on Kilele), campaigns (`campaigns_overview`), campaign detail (reported vs events with denominators; owner preview and confirm with expected addresses → `/sends/[id]`), sends detail (approval, status counts, paged recipients), imports (auto-refresh while running, owner upload) and import issues.
+**Pages smoke test (2026-09-13):** temporary Kilele owner, Kilele analyst and Marrakech owner with real `@supabase/ssr` session cookies against `next start`: 16/16 route checks passed (owner sees "34,665 customers → 34,665 addresses" and the approve control on KIL-0016; analyst sees neither send nor upload control; SMS campaign states why; a Karoo campaign id and a random send id show not-found; a page past the end shows the empty state; signed-out `/` redirects to `/login`). No approve_send was called. Kilele timings after warm-up: `/contacts` ~115 ms, page 50 ~110 ms, search ~110 ms, owner campaign detail with `preview_send` ~120 ms (AC3.1). Temp users and allowlist rows removed.
 
 **Auth config (2026-09-13):** set on the project through the Management API and mirrored in `supabase/config.toml`. `disable_signup=true`; before-user-created hook `pg-functions://postgres/private/hook_before_user_created` enabled. Verified: public signup refused ("Signups not allowed"); with signups briefly re-enabled, a stranger got 403 "This account is not authorised…" and no account was created. The Admin API (server key only) bypasses hooks. Google sign-in for existing users relies on linking by verified email; to be verified once the Google accounts exist.
 
@@ -117,13 +117,13 @@ Velocity Growth Growth Engineer build task. Graded primarily on data correctness
 ### Pass 2: Loading
 
 - [ ] Brand-aware ingestion pipeline (seed script + owner upload)
-- [ ] import_runs / import_rejections and an Imports screen
+- [x] import_runs / import_rejections and an Imports screen
 - [x] Seed data loaded for all three brands, including Kilele delta
 - [ ] Malformed fixture files for rejection tests
 
 ### Pass 3: Views, numbers, send
 
-- [ ] Contacts view, campaigns view, dashboard
+- [x] Contacts view, campaigns view, dashboard
 - [ ] Send flow: preview, confirm, immutable approval, snapshot, single-flight, pg_cron dispatch
 - [ ] Dispatch interruption test hook
 
