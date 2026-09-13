@@ -2,9 +2,13 @@
 
 ## Status (2026-09-13)
 
-**Progress:** Execute phase, Phase 4 of 8 done (schema, ingestion SQL, parser, chunked loader Edge Function, seed data loaded, dashboard RPCs). Next: send flow.
+**Progress:** Execute phase. Done: schema, ingestion, seed load, dashboard RPCs, isolation test, auth config (signups off, allowlist hook on), send flow SQL (preview, approval, frozen snapshot, single-flight, worker functions, dispatch pause). Next: UI screens. Waiting on the user for the provider's send API docs (endpoint, body, response, limits) before the dispatch Edge Function + cron.
 
-**Last commit:** see `git log` — dashboard RPCs
+**Last commit:** see `git log` — send flow SQL
+
+**Auth config (2026-09-13):** set on the project through the Management API and mirrored in `supabase/config.toml`. `disable_signup=true`; before-user-created hook `pg-functions://postgres/private/hook_before_user_created` enabled. Verified: public signup refused ("Signups not allowed"); with signups briefly re-enabled, a stranger got 403 "This account is not authorised…" and no account was created. The Admin API (server key only) bypasses hooks. Google sign-in for existing users relies on linking by verified email; to be verified once the Google accounts exist.
+
+**Send flow SQL (2026-09-13):** migrations `20260913160000_sends`, `20260913160100_dispatch_pause`. `tests/sends.test.ts` 10/10 live, `tests/isolation.test.ts` 9/9 (now also covers `sends`, `send_chunks`, `send_recipients` automatically). Decisions: chunk size 250 (to revisit once provider limits are known; fixed per approval); `recipient_id` sent to the provider = lowest customer external id behind the address; an address is suppressed at its chunk's first claim if ANY of its customers became ineligible, or if none of them still has that email ("Email address changed after approval"); a chunk that is not confirmed after 5 attempts ends failed, with the last error on each pending recipient; `record_send_chunk` requires a result for every pending recipient and is a no-op for the same batch twice; last sent = latest of portal approval, file `sent_at`, seed send-log `queued_at`; the confirm carries the previewed address count and is refused (VC422) if the audience moved. Custom SQLSTATEs: VC403/VC404/VC409/VC422. Dispatch pause is a lease (`pause_dispatch(minutes)`, max 60) so live tests cannot trigger real sends.
 
 **Dashboard RPCs:** migration `20260913150000_dashboard_rpcs` applied. `dashboard_totals`, `dashboard_contactable_breakdown`, `dashboard_signups_per_day`, `dashboard_campaign_performance`: all four are SECURITY INVOKER, so forced RLS decides what they return. A rolled-back check signed in as a member of each brand passed 38/38: total = loaded contacts; breakdown adds up to total (Kilele 82,424 = 34,665 contactable + exclusions); 30 days with only today partial, in the brand's timezone; unique opens match a direct distinct count; a non-member gets no rows; anon is refused. Kilele timings: totals 1.8 s (cold), breakdown 1.3 s, signups 0.2 s, performance 0.4 s. Decision: "counted from events" figures are divided by the file's `reported_sent`, because seed events have no "delivered". Data facts: Karoo is 67% "complained" (the source file is ~20% complaints per event type, and complaints on any channel are a brand opt-out); Karoo and Marrakech have no signups in the last 30 days.
 
@@ -27,11 +31,11 @@
 
 **Decisions made during execution:** status `pending` is not contactable; unsubscribes and complaints on any channel are a brand opt-out, only email bounces block email; a header row repeated mid-file is rejected as `repeated_header`. Edge Function CPU limit (2 s) → the loader reads files in byte ranges with a stored byte cursor and self-invocation; 1 MB event ranges hit the 8 s PostgREST statement timeout, so ranges are 256 KB. Runs load strictly in queue order per brand; a range that kills its worker 3 times fails the run. Seed runs are queued by the service role (no owners exist yet), `requested_by` empty; same bucket, queue and worker as upload. NUL characters are stripped with a warning. Zone-less `DD/MM/YYYY HH:MM` signups (1,200 Kilele rows) are read in the brand's local time with a warning. A repeated id within a file counts as "merged". The worker accepts only the `sb_secret` key (Edge Function env has no legacy service_role key) and Storage needs `apikey` with it.
 
-**Next steps:** sends, poller, shares, cron (including a `process-imports` trigger for in-app uploads), isolation test, auth config, deploy, docs.
+**Next steps:** UI screens, shares, dispatch worker + poller + cron (after provider docs; cron also triggers `process-imports` for in-app uploads), Google OAuth, deploy, docs.
 
 **User blockers:** six Google accounts + one non-allowlisted account (emails needed for the allowlist); email to Velocity.
 
-**Resume action:** "Resume issue #1: build the send flow (preview, immutable approval with frozen snapshot, single-flight, pg_cron dispatch)."
+**Resume action:** "Resume issue #1: build the UI screens (sign-in, dashboard, contacts, campaigns with send preview/confirm, imports)."
 
 ## What?
 
