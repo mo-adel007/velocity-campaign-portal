@@ -1,5 +1,25 @@
 # Issue #1: Build multi-brand client campaign portal
 
+## Status (2026-09-13)
+
+**Progress:** Execute phase, Phase 3 of 8 in progress (Phases 0–2 schema done; ingestion SQL + parser done; loader Edge Function not started).
+
+**Last commit:** `f9ff22e` feat(ingest): brand-aware parser, validation rules and idempotent SQL ingest
+
+**Evidence:** migrations `20260913120000_core_schema_and_isolation` and `20260913120100_ingestion` applied to Supabase project `dbedjxkhytvlvlkwdoma`; `tests/ingest.test.ts` 17/17 passing against seed files; `npm run build` passed at scaffold.
+
+**Branch:** `feat/1-campaign-portal`, 6 commits ahead of `origin/main`, pushed. Draft PR #2.
+
+**Environment notes:** npm/npx shims break on the `&` in the worktree path — run CLIs with `node scripts/env-run.mjs <supabase|vitest|next>` (loads `.env.local`) or via junction `D:\vcp` with `cmd //c "cd /d D:\vcp && npm …"`. Secrets live in the user-written, gitignored `.env.local`. The Supabase token can also see unrelated production projects — only ever target `dbedjxkhytvlvlkwdoma`.
+
+**Decisions made during execution:** status `pending` is not contactable; unsubscribes and complaints on any channel are a brand opt-out, only email bounces block email; a header row repeated mid-file is rejected as `repeated_header`. Edge Function CPU limit (2 s) → the loader reads files in ~1 MB byte ranges with a stored byte cursor and self-invocation.
+
+**Next steps:** migration adding `byte_cursor`, `header_line`, `file_size`, `encoding` to `import_runs` plus `yield_import_run`; `process-imports` Edge Function; seed loader through the owner upload path; then dashboard RPCs, sends, poller, shares, cron, isolation test, auth config, deploy, docs.
+
+**User blockers:** six Google accounts + one non-allowlisted account (emails needed for the allowlist); email to Velocity.
+
+**Resume action:** "Resume issue #1: build the process-imports Edge Function with byte-range chunking and load the seed data."
+
 ## What?
 
 A client campaign portal for three brands (Kilele Rides, Karoo Coaches, Marrakech Express) on one Supabase database. Six users (owner + analyst per brand) sign in by password or Google, see only their brand's contacts, campaigns and dashboard, load data with visible rejections, send email campaigns through the Velocity messaging provider, track delivery/engagement, and publish password-protected result links.
