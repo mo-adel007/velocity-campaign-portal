@@ -28,6 +28,9 @@ Velocity Growth Growth Engineer build task. Graded primarily on data correctness
 - Rejected, not rerouted: shifted-column rows, rows whose brand code is another brand, invalid emails, future signup dates, events for unknown campaigns, cross-brand parent campaign references.
 - Events deduplicated by `event_id`; seed vocabulary `open/click/bounce/unsubscribe/complaint` mapped alongside provider `delivered/bounced/opened/unsubscribed`.
 - Seed send-log (batch ids unknown to provider) is read-only history, never reconciled.
+- Missing or malformed email: customer is kept (counts in total), email stored as NULL, raw value recorded as an import warning, non-contactable reason "invalid email".
+- Country normalized to ISO-2 through an explicit map (e.g. `KEN`, `254` → `KE`); unmappable values (`ZZ`, `none`) become unknown and are excluded from country-filtered sends; every normalization logged.
+- Karoo rows with a blank brand code are loaded as Karoo only when every field validates under the detected layout (with an import warning); otherwise rejected.
 
 **Numbers**
 
@@ -357,9 +360,39 @@ Then it is not found
 
 **AI:** create Supabase project and config; deploy to Vercel; configure Google OAuth client via browser automation
 
-## TBD (implementation-clarity)
+## Implementation Approach
 
-- Dispatch interruption mechanism
-- Poll interval (within the 5-minute AC4.1 guarantee)
+- Next.js (App Router) on Vercel with `@supabase/ssr`; Supabase for data, auth, storage, Edge Functions, cron.
+- In-app upload: file goes to a brand-scoped Storage bucket, an import run is queued, and a cron-triggered Edge Function processes it in resumable chunks with the same parser as the seed script.
+- Workers: pg_cron (every minute) calls Edge Functions through pg_net for dispatch and event polling; the provider key lives only in Edge Function secrets.
+- Dispatch: recipients are split into frozen chunks at approval; `Idempotency-Key` = send id + chunk number; the batch id is recorded per chunk.
+- Interruption test: a test-only environment flag makes the worker stop after the provider call and before recording the result.
+- Tests: Vitest against the live project — cross-brand denial with real user sessions on the anon key, plus a catalog check over a direct Postgres connection that every brand-data table has forced RLS and policies.
+- Secrets: gitignored `.env.local` in the worktree.
+- Google OAuth client: configured through browser automation; on sign-in/2FA blockage, hand off a step checklist.
+
+## Provider Spike (2026-09-13)
+
+**Setup:** one recipient (Kilele `CT-037309`), three POST calls with `Idempotency-Key: spike-idem-001`. Provider batch `batch_c4d97ef065f290ff06ca` now exists on the delivery record.
+
+**Replay:** identical body with the same key returns the same `batch_id` and response. A different body with the same key also silently returns the original response — no conflict error. Therefore a key must only ever be used for one frozen chunk.
+
+**Events:** shape `{event_id, recipient_id, brand_code, type, occurred_at}` in pages `{batch_id, events, next_cursor, has_more}`. `brand_code` came back as `"account"`, not the brand sent — brand is taken from the send, never from events.
+
+**Messiness observed:** the same event ids appeared twice in one page, and a forged event (`evt-batch_c4-forged`, recipient `CT-087796`, brand `KAROO`) appeared in the Kilele batch. Events are accepted only when their recipient belongs to that batch's frozen recipients; everything else is recorded as rejected.
+
+**Cursor:** `since` takes the opaque `next_cursor`, not an `event_id` (contrary to the docs). When `next_cursor` is null, polling keeps the last known cursor or re-reads and relies on `event_id` deduplication.
+
+**Errors:** unknown batch → `404 {"error":"not_found","message":"unknown batch_id"}`.
+
+## Verification Plan
+
+**Sanity (execute session):** migrations applied, forced RLS on every brand-data table, cron jobs scheduled; Edge Functions deployed and each worker runs once without error; `npm run build` passes and the live URL renders sign-in; README, `schema.sql` and these decisions present.
+
+**Acceptance (separate ac-verify session):** AI verifies binary ACs; real sends for verification use Marrakech `MAR-0006` only (Kilele exercised through preview counts); user witnesses Google sign-in (AC1.2) and judges phone and client-grade feel (AC5.1).
+
+## TBD
+
+- Poll interval chosen within the 5-minute AC4.1 guarantee (planned: every minute)
 
 <!-- Verify Phase: Use ac-verify skill for schema + workflow -->
