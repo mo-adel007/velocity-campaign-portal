@@ -128,7 +128,8 @@ describe("Karoo contacts (cp1252, shifted rows, foreign brand rows)", () => {
   });
 });
 
-describe("Kilele contacts", () => {
+// Whole-file parses of the 20 MB Kilele export take several seconds.
+describe("Kilele contacts", { timeout: 30_000 }, () => {
   const r = loadWhole("kilele-contacts.csv", "KILELE");
 
   it("rejects Karoo-coded rows and future signups", () => {

@@ -103,10 +103,10 @@ Velocity Growth Growth Engineer build task. Graded primarily on data correctness
 
 ### Pass 1: Access & isolation
 
-- [ ] Supabase project with brands, brand_members, allowlist, RLS forced on all brand-data tables
+- [x] Supabase project with brands, brand_members, allowlist, RLS forced on all brand-data tables
 - [ ] Password and Google sign-in configured; signups disabled; allowlist auth hook
 - [ ] Six users provisioned with roles
-- [ ] Automated isolation test that fails if RLS is removed or a new brand-data table lacks it
+- [x] Automated isolation test that fails if RLS is removed or a new brand-data table lacks it (`tests/isolation.test.ts`, 9/9 live; the mutation case proves the rules catch weakened RLS and unprotected new tables)
 
 ### Pass 2: Loading
 
