@@ -2,9 +2,11 @@
 
 ## Status (2026-09-13)
 
-**Progress:** Execute phase. Done: schema, ingestion, seed load, dashboard RPCs, isolation test, auth config (signups off, allowlist hook on), send flow SQL (preview, approval, frozen snapshot, single-flight, worker functions, dispatch pause). Next: UI screens. Waiting on the user for the provider's send API docs (endpoint, body, response, limits) before the dispatch Edge Function + cron.
+**Progress:** Execute phase. Done: schema, ingestion, seed load, dashboard RPCs, isolation test, auth config (signups off, allowlist hook on), send flow SQL (preview, approval, frozen snapshot, single-flight, worker functions, dispatch pause), pg_cron worker kick for imports, UI foundation (Supabase SSR clients, `src/proxy.ts`, `getPortal`, formatting, shared UI components, light/dark tokens, sign-in with password + Google, OAuth callback). Next: portal pages. Waiting on the user for the provider's send API docs (endpoint, body, response, limits) before the dispatch Edge Function + event poller.
 
-**Last commit:** see `git log` — send flow SQL
+**Last commit:** see `git log` — UI foundation (`next build` passes; 44/44 tests at the send-flow commit)
+
+**UI notes for the next session:** Next 16.3 — `proxy.ts` (not middleware), async `params`/`searchParams` with global `PageProps<'/route'>`, `error.tsx` props `{ error, retry }`, `redirect()` outside try/catch, no caching by default. Uploads go browser → Storage (`<brand_id>/<uuid>-<name>`), then the `request_import` server action (server action body limit). The scaffold `src/app/page.tsx` must be deleted when `(portal)/page.tsx` is added. `.env.local` now also holds `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. Planned pages: `(portal)/layout` (nav, role, sign out), loading/error, dashboard (signups chart: one blue series, hover tooltip, today hatched and labelled partial, timezone label, table view; breakdown sums to total), contacts (search + paging with the `contact_block_reason` computed column; check < 2 s on Kilele), campaigns (`campaigns_overview`), campaign detail (reported vs events with denominators; owner preview and confirm with expected addresses → `/sends/[id]`), sends detail (approval, status counts, paged recipients), imports (auto-refresh while running, owner upload) and import issues.
 
 **Auth config (2026-09-13):** set on the project through the Management API and mirrored in `supabase/config.toml`. `disable_signup=true`; before-user-created hook `pg-functions://postgres/private/hook_before_user_created` enabled. Verified: public signup refused ("Signups not allowed"); with signups briefly re-enabled, a stranger got 403 "This account is not authorised…" and no account was created. The Admin API (server key only) bypasses hooks. Google sign-in for existing users relies on linking by verified email; to be verified once the Google accounts exist.
 
@@ -35,7 +37,7 @@
 
 **User blockers:** six Google accounts + one non-allowlisted account (emails needed for the allowlist); email to Velocity.
 
-**Resume action:** "Resume issue #1: build the UI screens (sign-in, dashboard, contacts, campaigns with send preview/confirm, imports)."
+**Resume action:** "Resume issue #1: build the portal pages (layout, dashboard, contacts, campaigns + send, sends, imports) on top of the committed UI foundation."
 
 ## What?
 
