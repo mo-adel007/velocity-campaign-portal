@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  --surface-0: #f6f6f4;
+  --surface-1: #fcfcfb;
+  --border: #e4e3de;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #77766f;
+  --accent: #2a78d6;
+  --accent-ink: #1d5fae;
+  --accent-soft: #e6effa;
+  --series-1: #2a78d6;
+  --good: #1f7a3a;
+  --good-soft: #e5f3e8;
+  --warning: #8a5a00;
+  --warning-soft: #fbf0d9;
+  --critical: #b3261e;
+  --critical-soft: #fbe7e5;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --border: #2e2e2b;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #9a998f;
+    --accent: #3987e5;
+    --accent-ink: #8fbcf2;
+    --accent-soft: #1b2b40;
+    --series-1: #3987e5;
+    --good: #6cc486;
+    --good-soft: #17301f;
+    --warning: #e3b457;
+    --warning-soft: #33280f;
+    --critical: #f08a82;
+    --critical-soft: #3a1b18;
+  }
+}
+
+@theme inline {
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-line: var(--border);
+  --color-ink: var(--text-primary);
+  --color-ink-2: var(--text-secondary);
+  --color-ink-3: var(--text-muted);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-series-1: var(--series-1);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-critical: var(--critical);
+  --color-critical-soft: var(--critical-soft);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--surface-0);
+  color: var(--text-primary);
+}
+
+/* Tables become stacked label/value rows on phones, so nothing scrolls sideways. */
+@media (max-width: 640px) {
+  .rtable thead {
+    display: none;
+  }
+  .rtable tr {
+    display: block;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .rtable td {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.2rem 0 !important;
+    border: 0 !important;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+  .rtable td::before {
+    content: attr(data-label);
+    color: var(--text-muted);
+    text-align: left;
+    flex-shrink: 0;
+  }
+  .rtable td[data-label=""]::before {
+    content: none;
+  }
+}
+
+/* Today's bar is still filling up: hatched, so "partial" is not carried by color alone. */
+.bar-partial {
+  background-image: repeating-linear-gradient(135deg, transparent 0 3px, var(--surface-1) 3px 5px);
+}
