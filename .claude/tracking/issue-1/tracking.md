@@ -1,0 +1,365 @@
+# Issue #1: Build multi-brand client campaign portal
+
+## What?
+
+A client campaign portal for three brands (Kilele Rides, Karoo Coaches, Marrakech Express) on one Supabase database. Six users (owner + analyst per brand) sign in by password or Google, see only their brand's contacts, campaigns and dashboard, load data with visible rejections, send email campaigns through the Velocity messaging provider, track delivery/engagement, and publish password-protected result links.
+
+## Why?
+
+Velocity Growth Growth Engineer build task. Graded primarily on data correctness and guarantees: brand isolation, honest ingestion, correct numbers, safe sending, provider reconciliation, safe sharing.
+
+## Decisions
+
+**Access & isolation**
+
+- Isolation lives in Postgres: RLS enabled and FORCED on every brand-data table, keyed on `brand_members(user_id, brand_id, role)`.
+- Public signups disabled; a before-user-created auth hook rejects any email not on the allowlist.
+- Six logins are Google accounts controlled by the user, each also given a password. Google and password identities link by verified email.
+- Owners send, publish and upload; analysts only look (including import history and rejections).
+
+**Ingestion**
+
+- One brand-aware pipeline, used both by a seed script and by in-app upload.
+- Per-brand parsers: Kilele comma + UTF-8 BOM; Karoo cp1252 with different column names/order; Marrakech `;` delimiter, decimal comma, French headers.
+- Identity is `(brand, external_id)` for contacts and campaigns.
+- Byte-identical duplicate rows collapse; conflicting rows with the same id: last row wins, delta file wins over base; conflicts logged.
+- Kilele delta file is an upsert (corrections + new customers), never an append.
+- Every run recorded in `import_runs`; every rejected row in `import_rejections` with row number, raw content and reason.
+- Rejected, not rerouted: shifted-column rows, rows whose brand code is another brand, invalid emails, future signup dates, events for unknown campaigns, cross-brand parent campaign references.
+- Events deduplicated by `event_id`; seed vocabulary `open/click/bounce/unsubscribe/complaint` mapped alongside provider `delivered/bounced/opened/unsubscribed`.
+- Seed send-log (batch ids unknown to provider) is read-only history, never reconciled.
+
+**Numbers**
+
+- Total customers = distinct loaded customers for the brand.
+- Contactable = contactable by email: valid email AND consent true (blank = false) AND not unsubscribed/bounced/complained AND not deleted/suppressed. Exclusion breakdown shown.
+- Signups per day: last 30 days = today + 29 prior days, bucketed in brand local time (Africa/Nairobi, Africa/Johannesburg, Africa/Casablanca), zero-filled, today labelled partial.
+- Campaign performance shows both "reported by source file" (`reported_*`) and "counted from events" (unique counts), each labelled with source and denominator.
+
+**Send**
+
+- Only email campaigns are sendable; SMS campaigns are view-only with the reason shown.
+- Any email campaign can be sent; a previously sent campaign shows "last sent on <date>".
+- Audience = contactable-by-email customers, filtered by `target_country` when set.
+- Each confirm creates its own immutable approval: approver, time, audience rule, frozen recipient snapshot deduplicated by lowercase-trimmed email ("N customers → M addresses").
+- One in-flight send per campaign, enforced in the database.
+- Dispatch runs in the database via pg_cron in chunks, each provider call carrying an `Idempotency-Key`; per-recipient status recorded.
+- Recipients who become ineligible after approval are suppressed with a reason; the approved count never changes.
+
+**Provider feedback**
+
+- Provider has no webhooks: pg_cron polls `GET /v1/messages/{batch_id}/events` with a stored cursor per open batch.
+- Contact status derived by precedence (unsubscribe/complaint/bounce win), never by arrival order.
+- Contacts are independent per brand; no signal crosses brands.
+
+**Shared link**
+
+- Random 128-bit token in URL, bcrypt-hashed password, SECURITY DEFINER function returns one campaign's aggregates only (no PII).
+- Live results with an "as of" timestamp.
+- 5 wrong attempts lock the link for 15 minutes; locked response is identical for right and wrong passwords.
+- Links are revocable; share table has no direct anon access.
+
+**Stack & secrets**
+
+- Next.js on Vercel, Supabase. Provider key stored only in Supabase secrets, never in the repo or browser bundle.
+
+## Definition of Done
+
+### Pass 1: Access & isolation
+
+- [ ] Supabase project with brands, brand_members, allowlist, RLS forced on all brand-data tables
+- [ ] Password and Google sign-in configured; signups disabled; allowlist auth hook
+- [ ] Six users provisioned with roles
+- [ ] Automated isolation test that fails if RLS is removed or a new brand-data table lacks it
+
+### Pass 2: Loading
+
+- [ ] Brand-aware ingestion pipeline (seed script + owner upload)
+- [ ] import_runs / import_rejections and an Imports screen
+- [ ] Seed data loaded for all three brands, including Kilele delta
+- [ ] Malformed fixture files for rejection tests
+
+### Pass 3: Views, numbers, send
+
+- [ ] Contacts view, campaigns view, dashboard
+- [ ] Send flow: preview, confirm, immutable approval, snapshot, single-flight, pg_cron dispatch
+- [ ] Dispatch interruption test hook
+
+### Pass 4: Provider feedback & sharing
+
+- [ ] pg_cron event polling with cursor, precedence-based contact status
+- [ ] Fixture events (duplicates, out-of-order, cross-brand shared email)
+- [ ] Publish/revoke share link and public results page
+
+### Cross-cutting & submission
+
+- [ ] Loading, empty and error states on every screen; bad input rejected
+- [ ] Responsive at phone width
+- [ ] Deployed to a public Vercel URL
+- [ ] Public repo with real history, `schema.sql`, README
+- [ ] Submission note (≤300 words)
+
+## Acceptance Criteria
+
+### Pass 1: Access & isolation
+
+**AC1.1: Password sign-in lands in own portal**
+
+Given one of the six users
+When they sign in with email and password
+Then they land in their own brand's portal with their role shown
+
+**AC1.2: Google sign-in lands in the same portal**
+
+Given an allowlisted user's Google account
+When they sign in with Google
+Then they land in the same brand portal and role as with their password
+
+**AC1.3: Strangers get in nowhere**
+
+Given a Google account or email that is not one of the six
+When they try to sign in
+Then they are refused, no account is created, and no portal is shown
+
+**AC1.4: Analysts cannot send**
+
+Given an analyst
+When they view a campaign or request a send directly
+Then no send control is offered and the direct request is refused
+
+**AC1.5: No cross-brand data by any route**
+
+Given a signed-in user of brand A
+When they request brand B's customers, campaigns, events, sends, imports or shares, directly against Supabase or through the app
+Then nothing from brand B is returned
+
+**AC1.6: Signed-out requests get nothing**
+
+Given no signed-in user
+When brand data is requested with the public key
+Then nothing is returned
+
+**AC1.7: Tests catch removed isolation**
+
+Given the test suite
+When brand isolation is removed from any brand-data table, or a new brand-data table is added without it
+Then a test fails
+
+### Pass 2: Loading
+
+**AC2.1: Marketer sees what did not load**
+
+Given each brand's seed files
+When they are loaded
+Then the brand's Imports screen shows loaded and rejected counts and every rejected row with row number and reason (shifted columns, wrong brand, invalid email, future date, unknown campaign, cross-brand parent)
+
+**AC2.2: Loading twice leaves one set**
+
+Given an export that is already loaded
+When it is loaded again
+Then the customer count is unchanged and the run reports 0 new customers
+
+**AC2.3: Delta file corrects and adds**
+
+Given the Kilele delta file
+When it is loaded
+Then the 2,500 corrected customers show their new details and the 1,680 new customers are added, with no duplicates
+
+**AC2.4: Bad uploads are refused**
+
+Given an owner uploads a wrong-brand, unreadable, or missing-required-columns file
+When the upload is processed
+Then it is refused with a reason and nothing is stored
+
+**AC2.5: Characters and amounts are preserved**
+
+Given Karoo names with special characters and Marrakech decimal-comma amounts
+When they are viewed
+Then names display correctly and amounts equal the source values
+
+**AC2.6: Analysts cannot load data**
+
+Given an analyst
+When they try to load a data file, in the app or directly
+Then it is refused, while import history and rejections remain visible to them
+
+### Pass 3: Views & numbers
+
+**AC3.1: Big brand is as usable as small**
+
+Given Kilele's ~86k customers
+When the contacts view is opened, paged or searched
+Then results appear within 2 seconds, as they do for Marrakech
+
+**AC3.2: Campaigns show sendability**
+
+Given the campaigns view
+When it loads
+Then each campaign shows channel and last-sent status, and SMS campaigns state why they cannot be sent here
+
+**AC3.3: Total customers is stated**
+
+Given the dashboard
+When it loads
+Then total customers equals distinct loaded customers and the counting rule is shown
+
+**AC3.4: Contactable adds up**
+
+Given the dashboard
+When it loads
+Then contactable-by-email is shown with an exclusion breakdown, and contactable plus exclusions equals total
+
+**AC3.5: Signups per day are labelled**
+
+Given the dashboard
+When it loads
+Then signups per day for today and the 29 prior days are shown in the brand's local timezone, with zero days present, today marked partial, and the timezone labelled
+
+**AC3.6: Performance states its source**
+
+Given campaign performance
+When it is viewed
+Then "reported by source file" and "counted from events" figures each state their source and denominator
+
+**AC3.7: Screens say loading, empty or broken**
+
+Given a screen that is loading, has no data, or fails
+When it is viewed
+Then it says which of those it is
+
+### Pass 3: Send
+
+**AC3.8: Owner sees exactly who**
+
+Given an owner and an email campaign
+When they prepare a send
+Then they see the recipient list, the audience rule, "N customers → M addresses", and "last sent on <date>" if previously sent
+
+**AC3.9: Approval stays approved**
+
+Given an owner confirmed a send
+When that send is viewed, now or a month later
+Then it shows approver, time and the approved count, unchanged
+
+**AC3.10: Double confirm sends once**
+
+Given confirm is pressed twice, or from two sessions at once
+When both requests arrive
+Then exactly one send is created and the other is told a send is already in progress
+
+**AC3.11: Interrupted send neither doubles nor half-sends silently**
+
+Given a send is interrupted part-way
+When it resumes
+Then every address is messaged exactly once, per-recipient progress is visible, and it matches the provider's delivery record
+
+**AC3.12: Late unsubscribes are honoured**
+
+Given a recipient becomes ineligible after approval
+When the send goes out
+Then they are not messaged, are shown as suppressed with the reason, and the approved count is unchanged
+
+**AC3.13: SMS and in-flight campaigns are refused**
+
+Given an SMS campaign, or a campaign with a send in progress
+When a send is attempted in the app or directly
+Then it is refused
+
+**AC3.14: Provider rejections are visible**
+
+Given the provider rejects some recipients
+When the send completes
+Then those recipients are shown as failed with the provider's reason
+
+### Pass 4: Provider feedback
+
+**AC4.1: Events arrive while nobody is looking**
+
+Given provider events arrive while nobody has the app open
+When 5 minutes have passed
+Then the dashboard's delivery and engagement figures reflect them
+
+**AC4.2: Messy events do not distort numbers**
+
+Given duplicate and out-of-order events
+When figures are viewed
+Then each event counts once, and an unsubscribed or bounced contact stays non-contactable even if a later-arriving open appears
+
+**AC4.3: Unsubscribes stay within a brand**
+
+Given the same email exists in Kilele and Karoo
+When it unsubscribes from Kilele
+Then the Karoo contact is unchanged
+
+### Pass 4: Shared link
+
+**AC4.4: Stranger sees one campaign, no personal data**
+
+Given an owner published a campaign's results
+When a stranger opens the link with the correct password
+Then they see only that campaign's aggregate results with an "as of" time and no customer details
+
+**AC4.5: Wrong passwords reveal nothing**
+
+Given a wrong password
+When it is submitted 5 times
+Then nothing is revealed and the link is locked for 15 minutes, responding identically to right and wrong passwords
+
+**AC4.6: Guessed links reveal nothing**
+
+Given a guessed or altered link
+When it is opened
+Then it shows the same "not found" as a link that never existed
+
+**AC4.7: Revoked links stop working**
+
+Given a revoked link
+When it is opened
+Then no results are shown
+
+**AC4.8: Shares unreachable with the public key**
+
+Given the public key
+When share records are requested directly against Supabase
+Then nothing is returned
+
+**AC4.9: Analysts cannot publish**
+
+Given an analyst
+When they try to publish or revoke a link
+Then they are refused
+
+### Cross-cutting
+
+**AC5.1: Works on a phone**
+
+Given a 390px-wide phone screen
+When every flow is used
+Then it works without horizontal scrolling
+
+**AC5.2: Provider key stays secret**
+
+Given the public repo and the deployed site
+When both are searched for the provider key
+Then it is not found
+
+## Testability
+
+**Test fixtures:** synthetic seed bundle (SHA-256 `4961a25b…683d35c`), copied into the repo's fixtures; malformed upload files; fixture events (duplicates, out-of-order, Kilele/Karoo shared email) — to be created
+
+**Environment:** live URL on Vercel (TBD); Supabase project (TBD); provider base URL `https://dispatcher-production-72fc.up.railway.app` (key via Supabase secret, never committed)
+
+**Setup:** seed script loads all three brands; dispatch interruption hook for AC3.11; first real provider send only through the finished portal
+
+## Blockers
+
+**User:** set `SUPABASE_ACCESS_TOKEN` and `VERCEL_TOKEN`; create six Google accounts + one non-allowlisted Google account; email Velocity about allowlisting their Google emails
+
+**AI:** create Supabase project and config; deploy to Vercel; configure Google OAuth client via browser automation
+
+## TBD (implementation-clarity)
+
+- Dispatch interruption mechanism
+- Poll interval (within the 5-minute AC4.1 guarantee)
+
+<!-- Verify Phase: Use ac-verify skill for schema + workflow -->
