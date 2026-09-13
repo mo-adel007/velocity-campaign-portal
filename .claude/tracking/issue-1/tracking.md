@@ -2,23 +2,34 @@
 
 ## Status (2026-09-13)
 
-**Progress:** Execute phase, Phase 3 of 8 in progress (Phases 0–2 schema done; ingestion SQL + parser done; loader Edge Function not started).
+**Progress:** Execute phase, Phase 3 of 8 done (schema, ingestion SQL, parser, chunked loader Edge Function, seed data loaded). Next: dashboard RPCs.
 
-**Last commit:** `f9ff22e` feat(ingest): brand-aware parser, validation rules and idempotent SQL ingest
+**Last commit:** see `git log` — loader and seed load
 
-**Evidence:** migrations `20260913120000_core_schema_and_isolation` and `20260913120100_ingestion` applied to Supabase project `dbedjxkhytvlvlkwdoma`; `tests/ingest.test.ts` 17/17 passing against seed files; `npm run build` passed at scaffold.
+**Evidence:** migrations up to `20260913140000_import_merged_rows` applied to `dbedjxkhytvlvlkwdoma`; `process-imports` deployed (secret `IMPORT_CHUNK_BYTES=262144`); `tests/ingest.test.ts` 25/25 (chunked reads equal whole-file reads); `next build` passes. Seed loaded fresh, then again:
+
+| Brand | Customers | Campaigns | Events | Historical sends |
+|---|---|---|---|---|
+| Kilele | 82,424 | 44 | 303,314 | 7 |
+| Karoo | 12,406 | 19 | 69,100 | 0 |
+| Marrakech | 918 | 6 | 307 | 0 |
+
+- Every run: inserted + updated + unchanged + rejected + merged = rows.
+- Second load: 0 inserted in every run (AC2.2).
+- Delta: 1,681 new / 2,499 updated. One of the 2,500 corrections fixes a base row rejected for a future signup date, so it arrives as new (AC2.3 reading).
+- Reloading the base after the delta re-applies the base's old values for the 2,499 corrected customers until the delta is loaded again — last load wins, by design.
 
 **Branch:** `feat/1-campaign-portal`, 6 commits ahead of `origin/main`, pushed. Draft PR #2.
 
 **Environment notes:** npm/npx shims break on the `&` in the worktree path — run CLIs with `node scripts/env-run.mjs <supabase|vitest|next>` (loads `.env.local`) or via junction `D:\vcp` with `cmd //c "cd /d D:\vcp && npm …"`. Secrets live in the user-written, gitignored `.env.local`. The Supabase token can also see unrelated production projects — only ever target `dbedjxkhytvlvlkwdoma`.
 
-**Decisions made during execution:** status `pending` is not contactable; unsubscribes and complaints on any channel are a brand opt-out, only email bounces block email; a header row repeated mid-file is rejected as `repeated_header`. Edge Function CPU limit (2 s) → the loader reads files in ~1 MB byte ranges with a stored byte cursor and self-invocation.
+**Decisions made during execution:** status `pending` is not contactable; unsubscribes and complaints on any channel are a brand opt-out, only email bounces block email; a header row repeated mid-file is rejected as `repeated_header`. Edge Function CPU limit (2 s) → the loader reads files in byte ranges with a stored byte cursor and self-invocation; 1 MB event ranges hit the 8 s PostgREST statement timeout, so ranges are 256 KB. Runs load strictly in queue order per brand; a range that kills its worker 3 times fails the run. Seed runs are queued by the service role (no owners exist yet), `requested_by` empty; same bucket, queue and worker as upload. NUL characters are stripped with a warning. Zone-less `DD/MM/YYYY HH:MM` signups (1,200 Kilele rows) are read in the brand's local time with a warning. A repeated id within a file counts as "merged". The worker accepts only the `sb_secret` key (Edge Function env has no legacy service_role key) and Storage needs `apikey` with it.
 
-**Next steps:** migration adding `byte_cursor`, `header_line`, `file_size`, `encoding` to `import_runs` plus `yield_import_run`; `process-imports` Edge Function; seed loader through the owner upload path; then dashboard RPCs, sends, poller, shares, cron, isolation test, auth config, deploy, docs.
+**Next steps:** dashboard RPCs, sends, poller, shares, cron (including a `process-imports` trigger for in-app uploads), isolation test, auth config, deploy, docs.
 
 **User blockers:** six Google accounts + one non-allowlisted account (emails needed for the allowlist); email to Velocity.
 
-**Resume action:** "Resume issue #1: build the process-imports Edge Function with byte-range chunking and load the seed data."
+**Resume action:** "Resume issue #1: build the dashboard RPCs (totals, contactable breakdown, signups per day, campaign performance)."
 
 ## What?
 
@@ -99,7 +110,7 @@ Velocity Growth Growth Engineer build task. Graded primarily on data correctness
 
 - [ ] Brand-aware ingestion pipeline (seed script + owner upload)
 - [ ] import_runs / import_rejections and an Imports screen
-- [ ] Seed data loaded for all three brands, including Kilele delta
+- [x] Seed data loaded for all three brands, including Kilele delta
 - [ ] Malformed fixture files for rejection tests
 
 ### Pass 3: Views, numbers, send

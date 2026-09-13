@@ -12,7 +12,7 @@
  *     country normalised to ISO-2), so the marketer can see every change.
  *
  * Files arrive in byte-range chunks (Edge Function CPU limits), so parsing is
- * line-based: `splitCompleteLines` cuts a chunk at its last newline.
+ * line-based: `readChunk` cuts a byte range at its last newline.
  */
 import Papa from "papaparse";
 
@@ -36,6 +36,8 @@ export interface HeaderInfo {
 
 export interface ValidationContext {
   brandCode: string;
+  /** IANA zone of the brand; zone-less day/month/year dates are read in it. */
+  timeZone: string;
   now: Date;
 }
 
@@ -44,7 +46,7 @@ export interface ValidationContext {
 // ---------------------------------------------------------------------------
 
 /** UTF-8 when the bytes are valid UTF-8, otherwise Windows-1252 (Karoo's export). */
-export function decodeBytes(bytes: Uint8Array, encoding?: "utf-8" | "windows-1252") {
+export function decodeBytes(bytes: Uint8Array, encoding?: Encoding) {
   if (encoding) {
     return { text: new TextDecoder(encoding).decode(bytes), encoding };
   }
@@ -69,6 +71,28 @@ export function stripBom(text: string) {
 
 export function splitLines(text: string): string[] {
   return text.split(/\r?\n/).filter((line) => line.trim() !== "");
+}
+
+export type Encoding = "utf-8" | "windows-1252";
+
+/**
+ * Take the complete lines from one byte range of a file. A range that is not
+ * the file's end is cut after its last newline; `consumed` is where the next
+ * range starts. Returns null when a non-final range holds no newline at all.
+ *
+ * The encoding is decided by the first range containing a non-ASCII byte and
+ * then kept for the rest of the file (ASCII reads the same either way), so a
+ * cp1252 file whose first megabyte happens to be plain ASCII is still decoded
+ * as cp1252 later on.
+ */
+export function readChunk(bytes: Uint8Array, atEof: boolean, encoding: Encoding | null) {
+  const end = atEof ? bytes.length : lastNewlineEnd(bytes);
+  if (end === -1) return null;
+  const body = bytes.subarray(0, end);
+  let decided = encoding;
+  if (!decided && body.some((b) => b >= 0x80)) decided = decodeBytes(body).encoding;
+  const text = new TextDecoder(decided ?? "utf-8").decode(body);
+  return { consumed: end, encoding: decided, lines: splitLines(stripBom(text)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +271,32 @@ export function parseTimestamp(value: string | undefined): { iso: string | null;
   return Number.isNaN(d.getTime()) ? { iso: null, invalid: true } : { iso: d.toISOString(), invalid: false };
 }
 
+const DMY_DATETIME_RE = /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/;
+
+/**
+ * Kilele's export writes some signups as "DD/MM/YYYY HH:MM" with no zone
+ * (day first: days above 12 occur, months above 12 never do). Read as wall
+ * time in the brand's zone. Anything else goes through strict ISO parsing.
+ */
+export function parseLocalOrIsoTimestamp(value: string | undefined, timeZone: string) {
+  const m = value?.trim().match(DMY_DATETIME_RE);
+  if (!m) return { ...parseTimestamp(value), local: false };
+  const [day, month, year, hour, minute] = m.slice(1).map(Number);
+  const wall = Date.UTC(year, month - 1, day, hour, minute);
+  const check = new Date(wall);
+  if (check.getUTCDate() !== day || check.getUTCMonth() !== month - 1 || hour > 23 || minute > 59) {
+    return { iso: null, invalid: true, local: false };
+  }
+  // Offset of the zone at that moment: format the instant in the zone, compare to the wall time.
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+    }).formatToParts(check).map((p) => [p.type, p.value]),
+  );
+  const shown = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute);
+  return { iso: new Date(wall - (shown - wall)).toISOString(), invalid: false, local: true };
+}
+
 export function parseCount(value: string | undefined): { n: number | null; invalid: boolean } {
   if (isBlank(value)) return { n: null, invalid: false };
   const v = value!.trim();
@@ -338,10 +388,13 @@ export function validateRow(
         );
       }
 
-      const signup = parseTimestamp(get("signup_at"));
+      const signup = parseLocalOrIsoTimestamp(get("signup_at"), ctx.timeZone);
       if (signup.invalid) return reject("invalid_signup_date", `Signup date "${get("signup_at")}" is not a valid date.`);
       if (signup.iso && new Date(signup.iso).getTime() > ctx.now.getTime()) {
         return reject("future_signup_date", `Signup date ${signup.iso} is in the future.`);
+      }
+      if (signup.local) {
+        warn("signup_date_local_time", `Signup date "${get("signup_at")!.trim()}" has no timezone; read as day/month/year in ${ctx.timeZone} (${signup.iso}).`);
       }
       if (!signup.iso) warn("missing_signup_date", `Customer ${externalId} has no signup date.`);
 
@@ -521,9 +574,11 @@ export async function prepareRecords(kind: ImportKind, records: Record<string, u
  * Validate every complete line of a chunk. `firstRowNumber` is the 1-based data
  * row number of the first line (the header is row 0).
  */
-export function validateLines(header: HeaderInfo, lines: string[], firstRowNumber: number, ctx: ValidationContext) {
+export function validateLines(header: HeaderInfo, rawLines: string[], firstRowNumber: number, ctx: ValidationContext) {
   const records: Record<string, unknown>[] = [];
   const issues: Issue[] = [];
+  // Postgres text cannot hold NUL characters: remove them and say so on rows that load.
+  const lines = rawLines.map((line) => line.replaceAll(" ", ""));
   // One parse for the whole chunk (CPU budget); fall back to per-line parsing
   // if a quoted field spans lines and the two no longer line up.
   const parsed = parseDelimited(lines.join("\n"), header.delimiter);
@@ -534,6 +589,10 @@ export function validateLines(header: HeaderInfo, lines: string[], firstRowNumbe
     const result = validateRow(header, fields, rowNumber, line.length > 2000 ? `${line.slice(0, 2000)}…` : line, ctx);
     if (result.record) records.push(result.record);
     issues.push(...result.issues);
+    if (result.record && line !== rawLines[i]) {
+      issues.push({ row_number: rowNumber, severity: "warning", reason_code: "nul_character_removed",
+        message: "This row contained NUL characters, which were removed.", raw: line });
+    }
   });
   return { records, issues };
 }
